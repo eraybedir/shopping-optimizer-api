@@ -112,11 +112,28 @@ def preprocess_data():
     print("Preprocessing data...")
     products_list = []
     
+    # Check if CSV file exists
+    csv_file = "enriched_2025_05_21.csv"
+    if not os.path.exists(csv_file):
+        print(f"❌ CSV file not found: {csv_file}")
+        print(f"Current directory: {os.getcwd()}")
+        print(f"Files in directory: {os.listdir('.')}")
+        return []
+    
+    print(f"✅ CSV file found: {csv_file}")
+    print(f"File size: {os.path.getsize(csv_file)} bytes")
+    
     try:
-        with open("enriched_2025_05_21.csv", 'r', encoding='utf-8') as file:
+        with open(csv_file, 'r', encoding='utf-8') as file:
             reader = csv.DictReader(file)
+            print(f"CSV headers: {reader.fieldnames}")
             
+            row_count = 0
             for row in reader:
+                row_count += 1
+                if row_count % 5000 == 0:
+                    print(f"Processed {row_count} rows...")
+                
                 price = safe_float(row.get('price', 0))
                 if price <= 0:
                     continue
@@ -174,10 +191,13 @@ def preprocess_data():
                 products_list.append(product)
     
     except Exception as e:
-        print(f"Error reading CSV: {e}")
+        print(f"❌ Error reading CSV: {e}")
+        import traceback
+        traceback.print_exc()
         return []
     
-    print(f"Data preprocessing complete: {len(products_list)} products available")
+    print(f"✅ Data preprocessing complete: {len(products_list)} products available")
+    print(f"Total rows processed: {row_count}")
     return products_list
 
 def optimize_shopping(products, tdee, protein_g, fat_g, carb_g, budget, days=30):
@@ -284,6 +304,8 @@ def load_data():
         return True
     except Exception as e:
         print(f"❌ Error loading data: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 @app.route('/')
@@ -301,6 +323,17 @@ def health():
         "status": "healthy",
         "data_loaded": products is not None,
         "products_count": len(products) if products is not None else 0
+    })
+
+@app.route('/debug')
+def debug():
+    csv_file = "enriched_2025_05_21.csv"
+    return jsonify({
+        "csv_exists": os.path.exists(csv_file),
+        "csv_size": os.path.getsize(csv_file) if os.path.exists(csv_file) else 0,
+        "current_directory": os.getcwd(),
+        "files_in_directory": os.listdir('.'),
+        "products_loaded": len(products) if products is not None else 0
     })
 
 @app.route('/optimize', methods=['POST'])
