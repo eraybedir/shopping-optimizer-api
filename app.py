@@ -12,6 +12,19 @@ CORS(app)
 
 products = None
 
+def load_data():
+    global products
+    try:
+        print("Loading CSV data...")
+        products = preprocess_data()
+        print(f"✅ Data loaded successfully: {len(products)} products")
+        return True
+    except Exception as e:
+        print(f"❌ Error loading data: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 def map_main_group(item_category, name):
     item_category = str(item_category).lower()
     name = str(name).lower()
@@ -295,19 +308,6 @@ def optimize_shopping(products, tdee, protein_g, fat_g, carb_g, budget, days=30)
     
     return results
 
-def load_data():
-    global products
-    try:
-        print("Loading CSV data...")
-        products = preprocess_data()
-        print(f"✅ Data loaded successfully: {len(products)} products")
-        return True
-    except Exception as e:
-        print(f"❌ Error loading data: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
 @app.route('/')
 def home():
     return jsonify({
@@ -438,10 +438,10 @@ def optimize():
             "error": f"Internal server error: {str(e)}"
         }), 500
 
+# Initialize data loading
+print("🚀 Initializing Shopping Optimizer API v2.0 (No Pandas)...")
+if not load_data():
+    print("❌ Failed to load data. API may not function properly.")
+
 if __name__ == '__main__':
-    if load_data():
-        print("🚀 Shopping Optimizer API v2.0 (No Pandas) is ready!")
-        app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
-    else:
-        print("❌ Failed to load data. Exiting.")
-        exit(1) 
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False) 
