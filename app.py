@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import pandas as pd
+import csv
 from pulp import LpProblem, LpVariable, lpSum, LpMinimize, LpStatus, value, PULP_CBC_CMD
 import re
 import os
@@ -10,13 +10,13 @@ from datetime import datetime
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
-# Global variable to store the preprocessed dataframe
-df = None
+# Global variable to store the preprocessed data
+products = None
 
 # --- Category Mapping using C column (item_category) ---
-def map_main_group(row):
-    item_category = str(row['item_category']).lower()
-    name = str(row['name']).lower()
+def map_main_group(item_category, name):
+    item_category = str(item_category).lower()
+    name = str(name).lower()
     
     # Exclude granola items
     if 'granola' in item_category or 'granola' in name:
@@ -117,74 +117,109 @@ def extract_weight(name):
             return int(value)  # Already in grams
     return 1000  # Default weight in grams
 
+def safe_float(value, default=0.0):
+    """Safely convert string to float"""
+    try:
+        if isinstance(value, str):
+            # Clean price format
+            value = value.replace(" TL", "").replace(".", "").replace(",", ".")
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
 # --- Data Preprocessing ---
-def preprocess_data(df):
+def preprocess_data():
     print("Preprocessing data...")
     
-    # Clean price column
-    df["price"] = df["price"].astype(str).str.replace(" TL", "", regex=False)
-    df["price"] = df["price"].str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
-    df["price"] = pd.to_numeric(df["price"], errors="coerce")
+    products_list = []
     
-    # Clean nutrition columns
-    for col in ["calories", "protein", "carbs", "fat"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    try:
+        with open("enriched_2025_05_21.csv", 'r', encoding='utf-8') as file:
+            reader = csv.DictReader(file)
+            
+            for row in reader:
+                # Clean and validate price
+                price = safe_float(row.get('price', 0))
+                if price <= 0:
+                    continue
+                
+                # Clean and validate nutrition data
+                calories = safe_float(row.get('calories', 0))
+                protein = safe_float(row.get('protein', 0))
+                carbs = safe_float(row.get('carbs', 0))
+                fat = safe_float(row.get('fat', 0))
+                
+                if calories < 0 or protein < 0 or carbs < 0 or fat < 0:
+                    continue
+                
+                # Exclude beverages
+                category = row.get('category', '').lower()
+                if 'içecek' in category:
+                    continue
+                
+                # Exclude noodles
+                name = row.get('name', '').lower()
+                item_category = row.get('item_category', '').lower()
+                if 'noodle' in name or 'noodle' in item_category:
+                    continue
+                
+                # Exclude liver and heart products
+                if any(term in name for term in ['ciğer', 'yürek', 'liver', 'heart']):
+                    continue
+                
+                # Exclude products containing 'çabuk' or 'bardak'
+                if any(term in name for term in ['çabuk', 'bardak']):
+                    continue
+                
+                # Exclude Berliner and Kruvasan products
+                if any(term in name for term in ['berliner', 'kruvasan', 'croissant']):
+                    continue
+                
+                # Exclude products containing 'pilavı' and 'çikolata'
+                if any(term in name for term in ['pilavı', 'çikolata']):
+                    continue
+                
+                # Extract weight
+                weight_g = extract_weight(row.get('name', ''))
+                
+                # Apply filters
+                if weight_g > 5000 or price > 1000 or calories <= 0:
+                    continue
+                
+                # Map category
+                main_group = map_main_group(item_category, name)
+                if main_group == 'exclude':
+                    continue
+                
+                # Create product dict
+                product = {
+                    'name': row.get('name', ''),
+                    'market': row.get('market', ''),
+                    'price': price,
+                    'calories': calories,
+                    'protein': protein,
+                    'carbs': carbs,
+                    'fat': fat,
+                    'weight_g': weight_g,
+                    'main_group': main_group
+                }
+                
+                products_list.append(product)
     
-    # Remove rows with missing or invalid data
-    df = df.dropna(subset=["price", "calories", "protein", "carbs", "fat"])
-    df = df[(df["price"] > 0) & (df["calories"] >= 0) & (df["protein"] >= 0) & 
-            (df["carbs"] >= 0) & (df["fat"] >= 0)]
+    except Exception as e:
+        print(f"Error reading CSV: {e}")
+        return []
     
-    # Exclude beverages
-    df = df[~df["category"].str.lower().str.contains("içecek")]
-    
-    # Exclude noodles
-    df = df[~df["name"].str.lower().str.contains("noodle")]
-    df = df[~df["item_category"].str.lower().str.contains("noodle")]
-    
-    # Exclude liver and heart products
-    df = df[~df["name"].str.lower().str.contains("ciğer")]
-    df = df[~df["name"].str.lower().str.contains("yürek")]
-    df = df[~df["name"].str.lower().str.contains("liver")]
-    df = df[~df["name"].str.lower().str.contains("heart")]
-    
-    # Exclude products containing 'çabuk' or 'bardak' (Turkish only)
-    df = df[~df["name"].str.lower().str.contains("çabuk")]
-    df = df[~df["name"].str.lower().str.contains("bardak")]
-    
-    # Exclude Berliner and Kruvasan products
-    df = df[~df["name"].str.lower().str.contains("berliner")]
-    df = df[~df["name"].str.lower().str.contains("kruvasan")]
-    df = df[~df["name"].str.lower().str.contains("croissant")]
-    
-    # Exclude products containing 'pilavı' and 'çikolata'
-    df = df[~df["name"].str.lower().str.contains("pilavı")]
-    df = df[~df["name"].str.lower().str.contains("çikolata")]
-    
-    # Extract weight from product names
-    df["weight_g"] = df["name"].apply(extract_weight)
-    
-    # Apply filters
-    df = df[df["weight_g"] <= 5000]  # Max 5kg per item
-    df = df[df["price"] <= 1000]     # Max 1000 TL per item
-    df = df[df["calories"] > 0]      # Must have calories
-    
-    # Map categories using C column (item_category)
-    df['main_group'] = df.apply(map_main_group, axis=1)
-    
-    # Exclude granola items
-    df = df[df['main_group'] != 'exclude']
-    
-    print(f"Data preprocessing complete: {len(df)} products available")
-    return df
+    print(f"Data preprocessing complete: {len(products_list)} products available")
+    return products_list
 
 # --- Optimization ---
-def optimize_shopping(df, tdee, protein_g, fat_g, carb_g, budget, days=30):
+def optimize_shopping(products, tdee, protein_g, fat_g, carb_g, budget, days=30):
     print(f"Starting optimization with budget: {budget} TL")
     
     # Create optimization problem
     prob = LpProblem("ShoppingList", LpMinimize)
-    n = len(df)
+    n = len(products)
     
     # Decision variables: number of each item to buy (0-5)
     items = [LpVariable(f"x_{i}", lowBound=0, upBound=5, cat='Integer') for i in range(n)]
@@ -193,51 +228,51 @@ def optimize_shopping(df, tdee, protein_g, fat_g, carb_g, budget, days=30):
     y = [LpVariable(f"y_{i}", cat='Binary') for i in range(n)]
     
     # Objective: minimize total cost
-    prob += lpSum([items[i] * df.iloc[i]["price"] for i in range(n)])
+    prob += lpSum([items[i] * products[i]["price"] for i in range(n)])
     
     # Nutrition constraints (scaled for days)
-    prob += lpSum([items[i] * df.iloc[i]["calories"] for i in range(n)]) >= tdee * days
-    prob += lpSum([items[i] * df.iloc[i]["protein"] for i in range(n)]) >= protein_g * days
-    prob += lpSum([items[i] * df.iloc[i]["fat"] for i in range(n)]) >= fat_g * days
-    prob += lpSum([items[i] * df.iloc[i]["carbs"] for i in range(n)]) >= carb_g * days
+    prob += lpSum([items[i] * products[i]["calories"] for i in range(n)]) >= tdee * days
+    prob += lpSum([items[i] * products[i]["protein"] for i in range(n)]) >= protein_g * days
+    prob += lpSum([items[i] * products[i]["fat"] for i in range(n)]) >= fat_g * days
+    prob += lpSum([items[i] * products[i]["carbs"] for i in range(n)]) >= carb_g * days
     
     # Budget constraints: use at least 70% of budget
-    prob += lpSum([items[i] * df.iloc[i]["price"] for i in range(n)]) >= budget * 0.70
-    prob += lpSum([items[i] * df.iloc[i]["price"] for i in range(n)]) <= budget
+    prob += lpSum([items[i] * products[i]["price"] for i in range(n)]) >= budget * 0.70
+    prob += lpSum([items[i] * products[i]["price"] for i in range(n)]) <= budget
     
     # Category diversity: at least 1 from each main group
     for group in ['vegetables', 'fruits', 'dairy', 'legumes', 'meat_fish', 'grains']:
-        indices = [i for i in range(n) if df.iloc[i]['main_group'] == group]
+        indices = [i for i in range(n) if products[i]['main_group'] == group]
         if indices:
             prob += lpSum([items[i] for i in indices]) >= 1
     
     # Meat/Fish weight constraint: at least 7.5 kg
-    meat_indices = [i for i in range(n) if df.iloc[i]['main_group'] == 'meat_fish']
+    meat_indices = [i for i in range(n) if products[i]['main_group'] == 'meat_fish']
     if meat_indices:
-        prob += lpSum([items[i] * df.iloc[i]["weight_g"] for i in meat_indices]) >= 7500
+        prob += lpSum([items[i] * products[i]["weight_g"] for i in meat_indices]) >= 7500
     
     # Pasta weight constraint: maximum 2.5 kg total
     pasta_terms = ['makarna', 'pasta', 'spaghetti', 'penne', 'farfalle', 'rigatoni', 'şehriye', 'erişte']
-    pasta_indices = [i for i in range(n) if any(term in df.iloc[i]['name'].lower() for term in pasta_terms)]
+    pasta_indices = [i for i in range(n) if any(term in products[i]['name'].lower() for term in pasta_terms)]
     if pasta_indices:
-        prob += lpSum([items[i] * df.iloc[i]["weight_g"] for i in pasta_indices]) <= 2500
+        prob += lpSum([items[i] * products[i]["weight_g"] for i in pasta_indices]) <= 2500
     
     # Bulgur constraints: maximum 2.5 kg total and maximum 3 different items
     bulgur_terms = ['bulgur', 'bulguru', 'bulgurlu']
-    bulgur_indices = [i for i in range(n) if any(term in df.iloc[i]['name'].lower() for term in bulgur_terms)]
+    bulgur_indices = [i for i in range(n) if any(term in products[i]['name'].lower() for term in bulgur_terms)]
     if bulgur_indices:
-        prob += lpSum([items[i] * df.iloc[i]["weight_g"] for i in bulgur_indices]) <= 2500
+        prob += lpSum([items[i] * products[i]["weight_g"] for i in bulgur_indices]) <= 2500
         prob += lpSum([y[i] for i in bulgur_indices]) <= 3
     
     # Pirinç constraints: maximum 2.5 kg total and maximum 3 different items
     pirinc_terms = ['pirinç', 'pirinçli', 'rice']
-    pirinc_indices = [i for i in range(n) if any(term in df.iloc[i]['name'].lower() for term in pirinc_terms)]
+    pirinc_indices = [i for i in range(n) if any(term in products[i]['name'].lower() for term in pirinc_terms)]
     if pirinc_indices:
-        prob += lpSum([items[i] * df.iloc[i]["weight_g"] for i in pirinc_indices]) <= 2500
+        prob += lpSum([items[i] * products[i]["weight_g"] for i in pirinc_indices]) <= 2500
         prob += lpSum([y[i] for i in pirinc_indices]) <= 3
     
     # Weight constraint: maximum 50kg total
-    prob += lpSum([items[i] * df.iloc[i]["weight_g"] for i in range(n)]) <= 50000
+    prob += lpSum([items[i] * products[i]["weight_g"] for i in range(n)]) <= 50000
     
     # Product count constraint: maximum 200 products total
     prob += lpSum([items[i] for i in range(n)]) <= 200
@@ -260,8 +295,8 @@ def optimize_shopping(df, tdee, protein_g, fat_g, carb_g, budget, days=30):
         return None
     
     # Extract results
-    total_cost = sum([value(items[i]) * df.iloc[i]["price"] for i in range(n)])
-    total_weight = sum([value(items[i]) * df.iloc[i]["weight_g"] for i in range(n)])
+    total_cost = sum([value(items[i]) * products[i]["price"] for i in range(n)])
+    total_weight = sum([value(items[i]) * products[i]["weight_g"] for i in range(n)])
     total_items = sum([value(items[i]) for i in range(n)])
     
     # Prepare results
@@ -278,18 +313,18 @@ def optimize_shopping(df, tdee, protein_g, fat_g, carb_g, budget, days=30):
         qty = value(var)
         if qty and qty >= 1:
             item_info = {
-                'name': df.iloc[i]['name'],
-                'market': df.iloc[i]['market'],
+                'name': products[i]['name'],
+                'market': products[i]['market'],
                 'quantity': int(qty),
-                'price_per_unit': df.iloc[i]['price'],
-                'total_price': df.iloc[i]['price'] * qty,
-                'weight_per_unit': df.iloc[i]['weight_g'],
-                'total_weight': df.iloc[i]['weight_g'] * qty,
-                'calories': df.iloc[i]['calories'],
-                'protein': df.iloc[i]['protein'],
-                'carbs': df.iloc[i]['carbs'],
-                'fat': df.iloc[i]['fat'],
-                'category': df.iloc[i]['main_group']
+                'price_per_unit': products[i]['price'],
+                'total_price': products[i]['price'] * qty,
+                'weight_per_unit': products[i]['weight_g'],
+                'total_weight': products[i]['weight_g'] * qty,
+                'calories': products[i]['calories'],
+                'protein': products[i]['protein'],
+                'carbs': products[i]['carbs'],
+                'fat': products[i]['fat'],
+                'category': products[i]['main_group']
             }
             results['items'].append(item_info)
     
@@ -297,12 +332,11 @@ def optimize_shopping(df, tdee, protein_g, fat_g, carb_g, budget, days=30):
 
 # Load data on startup
 def load_data():
-    global df
+    global products
     try:
         print("Loading CSV data...")
-        df = pd.read_csv("enriched_2025_05_21.csv")
-        df = preprocess_data(df)
-        print(f"✅ Data loaded successfully: {len(df)} products")
+        products = preprocess_data()
+        print(f"✅ Data loaded successfully: {len(products)} products")
         return True
     except Exception as e:
         print(f"❌ Error loading data: {e}")
@@ -311,9 +345,9 @@ def load_data():
 @app.route('/')
 def home():
     return jsonify({
-        "message": "Shopping Optimizer API v2.0",
+        "message": "Shopping Optimizer API v2.0 (No Pandas)",
         "status": "running",
-        "products_loaded": len(df) if df is not None else 0,
+        "products_loaded": len(products) if products is not None else 0,
         "timestamp": datetime.now().isoformat()
     })
 
@@ -321,8 +355,8 @@ def home():
 def health():
     return jsonify({
         "status": "healthy",
-        "data_loaded": df is not None,
-        "products_count": len(df) if df is not None else 0
+        "data_loaded": products is not None,
+        "products_count": len(products) if products is not None else 0
     })
 
 @app.route('/optimize', methods=['POST'])
@@ -361,3 +395,86 @@ def optimize():
             return jsonify({"error": "Gender must be 'male' or 'female'"}), 400
         
         if not (20 < weight < 300):
+            return jsonify({"error": "Weight must be between 20 and 300 kg"}), 400
+        
+        if not (100 < height < 250):
+            return jsonify({"error": "Height must be between 100 and 250 cm"}), 400
+        
+        valid_activities = ['sedentary', 'lightly active', 'moderately active', 'very active', 'extra active']
+        if activity not in valid_activities:
+            return jsonify({"error": f"Activity must be one of: {', '.join(valid_activities)}"}), 400
+        
+        valid_goals = ['gaining weight', 'doing sports', 'losing weight', 'being healthy']
+        if goal not in valid_goals:
+            return jsonify({"error": f"Goal must be one of: {', '.join(valid_goals)}"}), 400
+        
+        if budget <= 0:
+            return jsonify({"error": "Budget must be positive"}), 400
+        
+        # Check if data is loaded
+        if products is None:
+            return jsonify({"error": "Product data not loaded"}), 500
+        
+        # Calculate nutrition targets
+        tdee = calculate_tdee(age, gender, weight, height, activity)
+        tdee, protein_g, fat_g, carb_g = get_macro_targets(tdee, goal)
+        
+        # Run optimization
+        results = optimize_shopping(products, tdee, protein_g, fat_g, carb_g, budget, days)
+        
+        if results is None:
+            return jsonify({
+                "error": "Optimization failed - no solution found. Try increasing budget or relaxing constraints."
+            }), 400
+        
+        # Calculate nutrition summary
+        total_calories = sum([item['calories'] * item['quantity'] for item in results['items']])
+        total_protein = sum([item['protein'] * item['quantity'] for item in results['items']])
+        total_fat = sum([item['fat'] * item['quantity'] for item in results['items']])
+        total_carbs = sum([item['carbs'] * item['quantity'] for item in results['items']])
+        
+        # Prepare response
+        response = {
+            "success": True,
+            "optimization_results": results,
+            "nutrition_targets": {
+                "calories_target": tdee * days,
+                "protein_target": protein_g * days,
+                "fat_target": fat_g * days,
+                "carbs_target": carb_g * days
+            },
+            "nutrition_achieved": {
+                "calories_achieved": total_calories,
+                "protein_achieved": total_protein,
+                "fat_achieved": total_fat,
+                "carbs_achieved": total_carbs
+            },
+            "parameters": {
+                "age": age,
+                "gender": gender,
+                "weight": weight,
+                "height": height,
+                "activity": activity,
+                "goal": goal,
+                "budget": budget,
+                "days": days
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        print(f"Error in optimization: {e}")
+        return jsonify({
+            "error": f"Internal server error: {str(e)}"
+        }), 500
+
+if __name__ == '__main__':
+    # Load data on startup
+    if load_data():
+        print("🚀 Shopping Optimizer API v2.0 (No Pandas) is ready!")
+        app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
+    else:
+        print("❌ Failed to load data. Exiting.")
+        exit(1)
