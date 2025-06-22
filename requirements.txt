@@ -1,5 +1,5 @@
-Flask==2.3.3
+Flask==3.0.0
 Flask-CORS==4.0.0
-pandas==2.1.1
+pandas==2.2.0
 PuLP==2.7.0
 gunicorn==21.2.0
