@@ -200,8 +200,13 @@ def preprocess_data():
                     'carbs': carbs,
                     'fat': fat,
                     'weight_g': weight_g,
-                    'main_group': main_group
+                    'main_group': main_group,
+                    'image_url': row.get('image_url', ''),
                 }
+                
+                # Debug: Print first few products with image URLs
+                if len(products_list) < 5:
+                    print(f"DEBUG: Product {len(products_list)} - Name: {product['name']}, Image URL: {product['image_url']}")
                 
                 products_list.append(product)
     
@@ -323,7 +328,8 @@ def optimize_shopping(products, tdee, protein_g, fat_g, carb_g, budget, days=30)
                     'protein': products[i]['protein'],
                     'carbs': products[i]['carbs'],
                     'fat': products[i]['fat'],
-                    'category': products[i]['main_group']
+                    'category': products[i]['main_group'],
+                    'image_url': products[i]['image_url'],
                 }
                 results['items'].append(item_info)
         
