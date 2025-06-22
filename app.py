@@ -6,6 +6,8 @@ import re
 import os
 import json
 from datetime import datetime
+import signal
+import time
 
 app = Flask(__name__)
 CORS(app)
@@ -215,98 +217,126 @@ def preprocess_data():
 
 def optimize_shopping(products, tdee, protein_g, fat_g, carb_g, budget, days=30):
     print(f"Starting optimization with budget: {budget} TL")
+    print(f"Processing {len(products)} products...")
     
-    prob = LpProblem("ShoppingList", LpMinimize)
-    n = len(products)
+    # Add timeout handling
+    def timeout_handler(signum, frame):
+        raise TimeoutError("Optimization timed out after 30 seconds")
     
-    items = [LpVariable(f"x_{i}", lowBound=0, upBound=5, cat='Integer') for i in range(n)]
-    y = [LpVariable(f"y_{i}", cat='Binary') for i in range(n)]
-    
-    prob += lpSum([items[i] * products[i]["price"] for i in range(n)])
-    
-    prob += lpSum([items[i] * products[i]["calories"] for i in range(n)]) >= tdee * days
-    prob += lpSum([items[i] * products[i]["protein"] for i in range(n)]) >= protein_g * days
-    prob += lpSum([items[i] * products[i]["fat"] for i in range(n)]) >= fat_g * days
-    prob += lpSum([items[i] * products[i]["carbs"] for i in range(n)]) >= carb_g * days
-    
-    prob += lpSum([items[i] * products[i]["price"] for i in range(n)]) >= budget * 0.70
-    prob += lpSum([items[i] * products[i]["price"] for i in range(n)]) <= budget
-    
-    for group in ['vegetables', 'fruits', 'dairy', 'legumes', 'meat_fish', 'grains']:
-        indices = [i for i in range(n) if products[i]['main_group'] == group]
-        if indices:
-            prob += lpSum([items[i] for i in indices]) >= 1
-    
-    meat_indices = [i for i in range(n) if products[i]['main_group'] == 'meat_fish']
-    if meat_indices:
-        prob += lpSum([items[i] * products[i]["weight_g"] for i in meat_indices]) >= 7500
-    
-    pasta_terms = ['makarna', 'pasta', 'spaghetti', 'penne', 'farfalle', 'rigatoni', 'şehriye', 'erişte']
-    pasta_indices = [i for i in range(n) if any(term in products[i]['name'].lower() for term in pasta_terms)]
-    if pasta_indices:
-        prob += lpSum([items[i] * products[i]["weight_g"] for i in pasta_indices]) <= 2500
-    
-    bulgur_terms = ['bulgur', 'bulguru', 'bulgurlu']
-    bulgur_indices = [i for i in range(n) if any(term in products[i]['name'].lower() for term in bulgur_terms)]
-    if bulgur_indices:
-        prob += lpSum([items[i] * products[i]["weight_g"] for i in bulgur_indices]) <= 2500
-        prob += lpSum([y[i] for i in bulgur_indices]) <= 3
-    
-    pirinc_terms = ['pirinç', 'pirinçli', 'rice']
-    pirinc_indices = [i for i in range(n) if any(term in products[i]['name'].lower() for term in pirinc_terms)]
-    if pirinc_indices:
-        prob += lpSum([items[i] * products[i]["weight_g"] for i in pirinc_indices]) <= 2500
-        prob += lpSum([y[i] for i in pirinc_indices]) <= 3
-    
-    prob += lpSum([items[i] * products[i]["weight_g"] for i in range(n)]) <= 50000
-    prob += lpSum([items[i] for i in range(n)]) <= 200
-    
-    for i in range(n):
-        prob += items[i] >= y[i]
-    prob += lpSum(y) >= 10
+    # Set timeout for 30 seconds
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(30)
     
     try:
-        prob.solve(PULP_CBC_CMD(msg=False, timeLimit=30))
+        prob = LpProblem("ShoppingList", LpMinimize)
+        n = len(products)
+        
+        items = [LpVariable(f"x_{i}", lowBound=0, upBound=5, cat='Integer') for i in range(n)]
+        y = [LpVariable(f"y_{i}", cat='Binary') for i in range(n)]
+        
+        prob += lpSum([items[i] * products[i]["price"] for i in range(n)])
+        
+        prob += lpSum([items[i] * products[i]["calories"] for i in range(n)]) >= tdee * days
+        prob += lpSum([items[i] * products[i]["protein"] for i in range(n)]) >= protein_g * days
+        prob += lpSum([items[i] * products[i]["fat"] for i in range(n)]) >= fat_g * days
+        prob += lpSum([items[i] * products[i]["carbs"] for i in range(n)]) >= carb_g * days
+        
+        prob += lpSum([items[i] * products[i]["price"] for i in range(n)]) >= budget * 0.70
+        prob += lpSum([items[i] * products[i]["price"] for i in range(n)]) <= budget
+        
+        for group in ['vegetables', 'fruits', 'dairy', 'legumes', 'meat_fish', 'grains']:
+            indices = [i for i in range(n) if products[i]['main_group'] == group]
+            if indices:
+                prob += lpSum([items[i] for i in indices]) >= 1
+        
+        meat_indices = [i for i in range(n) if products[i]['main_group'] == 'meat_fish']
+        if meat_indices:
+            prob += lpSum([items[i] * products[i]["weight_g"] for i in meat_indices]) >= 7500
+        
+        pasta_terms = ['makarna', 'pasta', 'spaghetti', 'penne', 'farfalle', 'rigatoni', 'şehriye', 'erişte']
+        pasta_indices = [i for i in range(n) if any(term in products[i]['name'].lower() for term in pasta_terms)]
+        if pasta_indices:
+            prob += lpSum([items[i] * products[i]["weight_g"] for i in pasta_indices]) <= 2500
+        
+        bulgur_terms = ['bulgur', 'bulguru', 'bulgurlu']
+        bulgur_indices = [i for i in range(n) if any(term in products[i]['name'].lower() for term in bulgur_terms)]
+        if bulgur_indices:
+            prob += lpSum([items[i] * products[i]["weight_g"] for i in bulgur_indices]) <= 2500
+            prob += lpSum([y[i] for i in bulgur_indices]) <= 3
+        
+        pirinc_terms = ['pirinç', 'pirinçli', 'rice']
+        pirinc_indices = [i for i in range(n) if any(term in products[i]['name'].lower() for term in pirinc_terms)]
+        if pirinc_indices:
+            prob += lpSum([items[i] * products[i]["weight_g"] for i in pirinc_indices]) <= 2500
+            prob += lpSum([y[i] for i in pirinc_indices]) <= 3
+        
+        prob += lpSum([items[i] * products[i]["weight_g"] for i in range(n)]) <= 50000
+        prob += lpSum([items[i] for i in range(n)]) <= 200
+        
+        for i in range(n):
+            prob += items[i] >= y[i]
+        prob += lpSum(y) >= 10
+        
+        print("Solving optimization problem...")
+        start_time = time.time()
+        
+        try:
+            prob.solve(PULP_CBC_CMD(msg=False, timeLimit=25))  # 25 seconds for solver, 5 seconds buffer
+        except Exception as e:
+            print(f"Solver error: {e}")
+            signal.alarm(0)  # Cancel timeout
+            return None
+        
+        solve_time = time.time() - start_time
+        print(f"Optimization completed in {solve_time:.2f} seconds")
+        
+        signal.alarm(0)  # Cancel timeout
+        
+        if LpStatus[prob.status] != "Optimal":
+            print(f"No optimal solution found. Status: {LpStatus[prob.status]}")
+            return None
+        
+        total_cost = sum([value(items[i]) * products[i]["price"] for i in range(n)])
+        total_weight = sum([value(items[i]) * products[i]["weight_g"] for i in range(n)])
+        total_items = sum([value(items[i]) for i in range(n)])
+        
+        results = {
+            'items': [],
+            'total_cost': total_cost,
+            'total_weight': total_weight,
+            'total_items': total_items,
+            'budget_usage': (total_cost / budget) * 100
+        }
+        
+        for i, var in enumerate(items):
+            qty = value(var)
+            if qty and qty >= 1:
+                item_info = {
+                    'name': products[i]['name'],
+                    'market': products[i]['market'],
+                    'quantity': int(qty),
+                    'price_per_unit': products[i]['price'],
+                    'total_price': products[i]['price'] * qty,
+                    'weight_per_unit': products[i]['weight_g'],
+                    'total_weight': products[i]['weight_g'] * qty,
+                    'calories': products[i]['calories'],
+                    'protein': products[i]['protein'],
+                    'carbs': products[i]['carbs'],
+                    'fat': products[i]['fat'],
+                    'category': products[i]['main_group']
+                }
+                results['items'].append(item_info)
+        
+        return results
+        
+    except TimeoutError:
+        print("❌ Optimization timed out after 30 seconds")
+        signal.alarm(0)  # Cancel timeout
+        return None
     except Exception as e:
-        print(f"Solver error: {e}")
+        print(f"❌ Unexpected error in optimization: {e}")
+        signal.alarm(0)  # Cancel timeout
         return None
-    
-    if LpStatus[prob.status] != "Optimal":
-        print(f"No optimal solution found. Status: {LpStatus[prob.status]}")
-        return None
-    
-    total_cost = sum([value(items[i]) * products[i]["price"] for i in range(n)])
-    total_weight = sum([value(items[i]) * products[i]["weight_g"] for i in range(n)])
-    total_items = sum([value(items[i]) for i in range(n)])
-    
-    results = {
-        'items': [],
-        'total_cost': total_cost,
-        'total_weight': total_weight,
-        'total_items': total_items,
-        'budget_usage': (total_cost / budget) * 100
-    }
-    
-    for i, var in enumerate(items):
-        qty = value(var)
-        if qty and qty >= 1:
-            item_info = {
-                'name': products[i]['name'],
-                'market': products[i]['market'],
-                'quantity': int(qty),
-                'price_per_unit': products[i]['price'],
-                'total_price': products[i]['price'] * qty,
-                'weight_per_unit': products[i]['weight_g'],
-                'total_weight': products[i]['weight_g'] * qty,
-                'calories': products[i]['calories'],
-                'protein': products[i]['protein'],
-                'carbs': products[i]['carbs'],
-                'fat': products[i]['fat'],
-                'category': products[i]['main_group']
-            }
-            results['items'].append(item_info)
-    
-    return results
 
 @app.route('/')
 def home():
@@ -387,14 +417,20 @@ def optimize():
         if products is None:
             return jsonify({"error": "Product data not loaded"}), 500
         
+        print(f"Starting optimization request for budget: {budget} TL")
+        start_time = time.time()
+        
         tdee = calculate_tdee(age, gender, weight, height, activity)
         tdee, protein_g, fat_g, carb_g = get_macro_targets(tdee, goal)
         
         results = optimize_shopping(products, tdee, protein_g, fat_g, carb_g, budget, days)
         
+        total_time = time.time() - start_time
+        print(f"Total optimization time: {total_time:.2f} seconds")
+        
         if results is None:
             return jsonify({
-                "error": "Optimization failed - no solution found. Try increasing budget or relaxing constraints."
+                "error": "Optimization failed - no solution found within time limit. Try increasing budget or relaxing constraints."
             }), 400
         
         total_calories = sum([item['calories'] * item['quantity'] for item in results['items']])
@@ -426,6 +462,10 @@ def optimize():
                 "goal": goal,
                 "budget": budget,
                 "days": days
+            },
+            "performance": {
+                "total_time_seconds": round(total_time, 2),
+                "products_processed": len(products)
             },
             "timestamp": datetime.now().isoformat()
         }
